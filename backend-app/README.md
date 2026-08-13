@@ -1,66 +1,209 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Gestión de documentos de gastos (OCR + extracción de información)
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Prueba técnica: aplicación para cargar facturas/recibos (JPG, PNG, PDF), extraer
+texto por OCR, convertir ese texto en campos estructurados, marcar qué tan confiable
+es cada campo, y permitir que un usuario revise, corrija y gestione esos documentos.
 
-## About Laravel
+## Stack y decisiones
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+| Capa | Elección | Por qué |
+|---|---|---|
+| Backend | **Laravel 11**  |
+| Frontend | **React + Vite** | SPA simple, sin necesidad de SSR. |
+| Base de datos | **SQLite** | Cero configuración para levantar el proyecto en minutos; el diseño (migraciones Eloquent estándar) es portable a MySQL/PostgreSQL solo cambiando `.env`. |
+| OCR | **Tesseract** (vía `thiagoalessio/tesseract_ocr`) | Motor open source, corre 100% local, sin API keys ni costos — ideal para una prueba técnica reproducible. Los PDF se rasterizan a imagen con Imagick/Ghostscript antes del OCR. |
+| Extracción de campos | **Reglas + regex** sobre el texto del OCR (`ExpenseExtractionService`) | No depende de un LLM externo (sin API key), es determinística, rápida, y fácil de auditar/depurar. El servicio está aislado, así que cambiarlo por un LLM en el futuro es solo reemplazar esta clase. |
+| Confiabilidad | Score 0.0–1.0 por campo (`field_confidence`, JSON) + score global | Ver sección "Estrategia de confiabilidad" abajo. |
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+### Estrategia de confiabilidad (punto 4 del enunciado)
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+Cada campo extraído recibe un score:
 
-## Learning Laravel
+- **1.0** → se encontró una etiqueta explícita e inequívoca en el texto (ej. "Total: $45.000").
+- **0.5–0.6** → se obtuvo por una heurística de respaldo (ej. proveedor = primera línea no numérica del documento; total = el monto con `$` más grande cuando no hay etiqueta "Total").
+- **0.0** → no se encontró nada; el campo queda `null` para que el usuario lo complete.
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+Campos con score < 0.6 se marcan como "dudosos": en el frontend aparecen con un badge
+de advertencia (⚠) y el input se resalta en ámbar, para que el usuario los revise
+antes de confiar en ellos. Esto evita que un dato mal leído por el OCR (ej. un "8"
+leído como "3") se guarde silenciosamente como si fuera correcto.
 
-You may also try the [Laravel Bootcamp](https://bootcamp.laravel.com), where you will be guided through building a modern Laravel application from scratch.
+### Trazabilidad
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+El texto crudo del OCR se guarda completo en `ocr_raw_text`, y el archivo original
+queda almacenado y enlazado al registro (`file_path`). Desde el detalle del
+documento se puede ver el texto de OCR y el archivo original, y también
+"reprocesar" (volver a correr OCR + extracción) si se ajusta la lógica.
 
-## Laravel Sponsors
+## Estructura del repositorio
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+```
+gestion-gastos/
+├── backend/     # Laravel — API REST (este paquete NO incluye el esqueleto de Laravel,
+│                  ver "Paso a paso" para generarlo)
+│   ├── app/Models/ExpenseDocument.php
+│   ├── app/Services/OcrService.php                 <- Etapa 2: OCR
+│   ├── app/Services/ExpenseExtractionService.php    <- Etapa 3 y 4: extracción + confiabilidad
+│   ├── app/Http/Controllers/Api/ExpenseDocumentController.php
+│   ├── app/Http/Requests/UpdateExpenseDocumentRequest.php
+│   ├── app/Http/Resources/ExpenseDocumentResource.php
+│   ├── database/migrations/..._create_expense_documents_table.php
+│   ├── routes/api.php
+│   ├── config/cors.php
+│   ├── composer-requirements.md
+│   └── .env.example
+└── frontend/    # React + Vite — SPA completa
+    ├── src/pages/DocumentsList.jsx      <- Etapa 6 y 7: listado + filtros
+    ├── src/pages/DocumentUpload.jsx     <- Etapa 1: carga
+    ├── src/pages/DocumentDetail.jsx     <- Etapa 5: revisión humana
+    ├── src/components/Filters.jsx
+    ├── src/components/ConfidenceBadge.jsx
+    ├── src/api/client.js
+    └── src/index.css
+```
 
-### Premium Partners
+> **Nota:** este paquete trae solo los archivos *propios* de la aplicación (los que
+> tienen la lógica de negocio), no el esqueleto completo de Laravel (que son cientos
+> de archivos de framework generados por Composer). El paso a paso de abajo genera
+> ese esqueleto y luego copia estos archivos encima.
 
-- **[Vehikl](https://vehikl.com/)**
-- **[Tighten Co.](https://tighten.co)**
-- **[WebReinvent](https://webreinvent.com/)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel/)**
-- **[Cyber-Duck](https://cyber-duck.co.uk)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Jump24](https://jump24.co.uk)**
-- **[Redberry](https://redberry.international/laravel/)**
-- **[Active Logic](https://activelogic.com)**
-- **[byte5](https://byte5.de)**
-- **[OP.GG](https://op.gg)**
+## Paso a paso para ejecutar el proyecto
 
-## Contributing
+### 0. Requisitos previos
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+- PHP 8.2+ y Composer
+- Node.js 18+
+- Motor de OCR a nivel de sistema operativo:
 
-## Code of Conduct
+  ```bash
+  # Ubuntu / Debian
+  sudo apt-get update
+  sudo apt-get install -y tesseract-ocr tesseract-ocr-spa imagemagick ghostscript php-imagick
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+  # macOS
+  brew install tesseract tesseract-lang imagemagick ghostscript
+  ```
 
-## Security Vulnerabilities
+  Si `php-imagick` no está disponible en tu entorno, revisa la nota al final de
+  `backend/composer-requirements.md` para usar `pdftoppm` como alternativa.
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+### 1. Backend (Laravel)
 
-## License
+```bash
+# Generar el esqueleto de Laravel en una carpeta nueva
+composer create-project laravel/laravel backend-app "^11.0"
+cd backend-app
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+# Copiar los archivos de esta entrega ENCIMA del esqueleto recién creado
+cp -r ../gestion-gastos/backend/app/Models/ExpenseDocument.php app/Models/
+cp -r ../gestion-gastos/backend/app/Services app/
+cp -r ../gestion-gastos/backend/app/Http/Controllers/Api app/Http/Controllers/
+cp -r ../gestion-gastos/backend/app/Http/Requests/UpdateExpenseDocumentRequest.php app/Http/Requests/
+cp -r ../gestion-gastos/backend/app/Http/Resources app/Http/
+cp ../gestion-gastos/backend/database/migrations/*.php database/migrations/
+cp ../gestion-gastos/backend/routes/api.php routes/api.php
+cp ../gestion-gastos/backend/config/cors.php config/cors.php
+cp ../gestion-gastos/backend/.env.example .env.example
+
+# Instalar la dependencia de OCR
+composer require thiagoalessio/tesseract_ocr
+
+# Configurar entorno
+cp .env.example .env
+php artisan key:generate
+touch database/database.sqlite   # porque .env usa DB_CONNECTION=sqlite
+
+# Migrar y enlazar storage público (para poder ver las imágenes cargadas)
+php artisan migrate
+php artisan storage:link
+
+# Levantar el servidor
+php artisan serve   # http://localhost:8000
+```
+
+> Laravel 11 no trae `routes/api.php` habilitado por defecto. Si al llamar a
+> `/api/expense-documents` te da 404, agrega esto en `bootstrap/app.php`, dentro de
+> `Application::configure(...)->withRouting(...)`:
+> ```php
+> ->withRouting(
+>     web: __DIR__.'/../routes/web.php',
+>     api: __DIR__.'/../routes/api.php',
+>     commands: __DIR__.'/../routes/console.php',
+>     health: '/up',
+> )
+> ```
+
+### 2. Frontend (React)
+
+```bash
+cd gestion-gastos/frontend
+cp .env.example .env
+npm install
+npm run dev   # http://localhost:5173
+```
+
+Abre `http://localhost:5173`. Con el backend corriendo en `:8000`, la SPA ya
+debería poder listar, cargar, filtrar y editar documentos.
+
+## Cómo funciona cada módulo
+
+1. **Carga (`DocumentUpload.jsx` → `ExpenseDocumentController@store`)**
+   El usuario sube un JPG/PNG/PDF. El backend lo valida (tipo y peso máx. 10 MB),
+   lo guarda en `storage/app/public/expense-documents` y crea el registro.
+
+2. **OCR (`OcrService`)**
+   Si es PDF, cada página se rasteriza a PNG con Imagick/Ghostscript. Cada imagen
+   pasa por Tesseract (idiomas español + inglés) y se concatena el texto.
+
+3. **Extracción (`ExpenseExtractionService`)**
+   Sobre el texto normalizado se aplican expresiones regulares por campo
+   (proveedor, número de factura, fecha, subtotal, impuestos, total, moneda) y
+   una clasificación por palabras clave para la categoría. Cada campo recibe un
+   score de confianza según qué tan directo fue el match (ver tabla arriba).
+
+4. **Persistencia**
+   Todo (campos + `ocr_raw_text` + `field_confidence` + `overall_confidence`)
+   se guarda en `expense_documents` con estado `pendiente_revision`.
+
+5. **Revisión humana (`DocumentDetail.jsx` → `@update`)**
+   El usuario ve el documento original al lado de los campos extraídos. Los
+   campos de baja confianza están resaltados. Puede corregir cualquier campo,
+   completar los que quedaron vacíos, cambiar la categoría y guardar; al guardar,
+   el registro pasa a `revisado` y queda marcado `was_manually_edited = true`
+   (así se distingue lo que dijo el OCR de lo que confirmó una persona).
+
+6. **Listado y gestión (`DocumentsList.jsx` → `@index` / `@destroy`)**
+   Tabla con proveedor, fecha, categoría, total, score de confianza y estado.
+   Permite ver/editar y eliminar cada documento.
+
+7. **Filtros (`Filters.jsx` → query params `fecha_desde`, `fecha_hasta`, `categoria`)**
+   Filtro por rango de fechas y por categoría (obligatorios en el enunciado),
+   más un filtro adicional por proveedor.
+
+8. **Git**
+   Este entregable está pensado para inicializarse como repo desde el momento en
+   que generes el esqueleto de Laravel (`git init` dentro de `backend-app/`) y
+   hagas commits a medida que copies/ajustes cada pieza — así queda visible la
+   evolución real del trabajo, tal como pide el enunciado.
+
+## Endpoints de la API
+
+| Método | Ruta | Descripción |
+|---|---|---|
+| GET | `/api/expense-documents` | Lista (filtros: `fecha_desde`, `fecha_hasta`, `categoria`, `proveedor`) |
+| POST | `/api/expense-documents` | Sube un archivo (`file`), corre OCR + extracción |
+| GET | `/api/expense-documents/{id}` | Detalle (incluye `ocr_raw_text`) |
+| PUT/PATCH | `/api/expense-documents/{id}` | Guarda correcciones manuales |
+| DELETE | `/api/expense-documents/{id}` | Elimina el documento y su archivo |
+| POST | `/api/expense-documents/{id}/reprocess` | Vuelve a correr OCR + extracción |
+
+## Limitaciones conocidas / próximos pasos
+
+- La extracción por regex funciona bien con facturas en español con etiquetas
+  razonablemente estándar; documentos muy atípicos pueden requerir más reglas o,
+  como evolución natural, delegar la extracción a un LLM (el `ExpenseExtractionService`
+  está aislado justamente para poder intercambiarlo sin tocar el resto de la app).
+- No hay autenticación (no se pidió para esta prueba).
+- No hay tests automatizados por el límite de tiempo de la prueba; los servicios
+  (`OcrService`, `ExpenseExtractionService`) están desacoplados del controlador
+  precisamente para que sean fáciles de testear con PHPUnit si se quisiera ampliar.
