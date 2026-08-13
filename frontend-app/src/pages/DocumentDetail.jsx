@@ -1,5 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import {
+  ArrowLeft,
+  Eye,
+  EyeOff,
+  FileText,
+  RefreshCw,
+  Save,
+  Trash2,
+} from 'lucide-react'
 import { ExpenseDocumentsAPI } from '../api/client.js'
 import ConfidenceBadge from '../components/ConfidenceBadge.jsx'
 
@@ -81,7 +90,8 @@ export default function DocumentDetail() {
   return (
     <div className="page">
       <Link to="/" className="back-link">
-        ← Volver al listado
+        <ArrowLeft size={15} strokeWidth={2.2} />
+        Volver al listado
       </Link>
 
       <div className="detail-grid">
@@ -89,6 +99,7 @@ export default function DocumentDetail() {
           <h3>Documento original</h3>
           {doc.mime_type === 'application/pdf' ? (
             <a href={doc.file_url} target="_blank" rel="noreferrer" className="btn-secondary">
+              <FileText size={15} strokeWidth={2} />
               Abrir PDF original
             </a>
           ) : (
@@ -96,11 +107,13 @@ export default function DocumentDetail() {
           )}
 
           <button type="button" className="btn-link" onClick={() => setShowOcrText((s) => !s)}>
+            {showOcrText ? <EyeOff size={14} strokeWidth={2.2} /> : <Eye size={14} strokeWidth={2.2} />}
             {showOcrText ? 'Ocultar' : 'Ver'} texto extraído por OCR
           </button>
           {showOcrText && <pre className="ocr-text">{doc.ocr_raw_text || '(vacío)'}</pre>}
 
-          <button type="button" className="btn-secondary" onClick={handleReprocess} disabled={saving}>
+          <button type="button" className="btn-secondary btn-block" onClick={handleReprocess} disabled={saving}>
+            <RefreshCw size={15} strokeWidth={2.2} />
             Reprocesar OCR + extracción
           </button>
         </div>
@@ -148,9 +161,11 @@ export default function DocumentDetail() {
 
           <div className="form-actions">
             <button type="submit" className="btn-primary" disabled={saving}>
+              <Save size={16} strokeWidth={2.2} />
               {saving ? 'Guardando…' : 'Guardar cambios'}
             </button>
             <button type="button" className="btn-link danger" onClick={handleDelete}>
+              <Trash2 size={14} strokeWidth={2.2} />
               Eliminar documento
             </button>
           </div>
