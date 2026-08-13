@@ -1,194 +1,267 @@
 # Gestión de documentos de gastos (OCR + extracción de información)
 
-Prueba técnica: aplicación para cargar facturas/recibos (JPG, PNG, PDF), extraer
-texto por OCR, convertir ese texto en campos estructurados, marcar qué tan confiable
-es cada campo, y permitir que un usuario revise, corrija y gestione esos documentos.
+Prueba técnica: una app para cargar facturas y recibos (JPG, PNG, PDF), sacarles el
+texto con OCR, convertir ese texto en campos estructurados (proveedor, fecha, montos,
+etc.), marcar qué tan confiable es cada campo, y dejar que un usuario revise y
+corrija todo antes de guardarlo.
 
-## Stack y decisiones
+## Stack y por qué se eligió así
 
 | Capa | Elección | Por qué |
 |---|---|---|
-| Backend | **Laravel 11**  |
-| Frontend | **React + Vite** | SPA simple, sin necesidad de SSR. |
-| Base de datos | **SQLite** | Cero configuración para levantar el proyecto en minutos; el diseño (migraciones Eloquent estándar) es portable a MySQL/PostgreSQL solo cambiando `.env`. |
-| OCR | **Tesseract** (vía `thiagoalessio/tesseract_ocr`) | Motor open source, corre 100% local, sin API keys ni costos — ideal para una prueba técnica reproducible. Los PDF se rasterizan a imagen con Imagick/Ghostscript antes del OCR. |
-| Extracción de campos | **Reglas + regex** sobre el texto del OCR (`ExpenseExtractionService`) | No depende de un LLM externo (sin API key), es determinística, rápida, y fácil de auditar/depurar. El servicio está aislado, así que cambiarlo por un LLM en el futuro es solo reemplazar esta clase. |
-| Confiabilidad | Score 0.0–1.0 por campo (`field_confidence`, JSON) + score global | Ver sección "Estrategia de confiabilidad" abajo. |
+| Backend | Laravel 11 | |
+| Frontend | React + Vite | SPA simple, no hace falta SSR para esto. |
+| Base de datos | SQLite | Para que cualquiera pueda levantar el proyecto sin instalar un motor aparte. Las migraciones son Eloquent estándar, así que pasar a MySQL/PostgreSQL es solo cambiar el `.env`. |
+| OCR | Tesseract (vía `thiagoalessio/tesseract_ocr`) | Corre local, sin API keys ni costos de por medio. Los PDF se convierten a imagen antes de pasarlos por Tesseract (ver más abajo por qué se usa `pdftoppm` y no Imagick). |
+| Extracción de campos | Reglas + regex sobre el texto del OCR (`ExpenseExtractionService`) | No depende de un LLM externo, es determinística y se puede depurar leyendo el código. El servicio queda aislado del resto, así que si más adelante se quiere cambiar por un LLM, es solo reemplazar esa clase. |
+| Confiabilidad | Score 0.0–1.0 por campo (`field_confidence`) + score global | Ver la sección de abajo. |
 
-### Estrategia de confiabilidad (punto 4 del enunciado)
+### Cómo funciona lo de la confiabilidad
 
-Cada campo extraído recibe un score:
+Cada campo que se extrae recibe un puntaje:
 
-- **1.0** → se encontró una etiqueta explícita e inequívoca en el texto (ej. "Total: $45.000").
-- **0.5–0.6** → se obtuvo por una heurística de respaldo (ej. proveedor = primera línea no numérica del documento; total = el monto con `$` más grande cuando no hay etiqueta "Total").
-- **0.0** → no se encontró nada; el campo queda `null` para que el usuario lo complete.
+- **1.0** — se encontró pegado a una etiqueta clara del documento (ej. "Total: $45.000").
+- **0.7–0.9** — se encontró cerca de la etiqueta pero no exactamente pegado (pasa seguido cuando el OCR desordena un poco el texto de una tabla).
+- **0.5–0.6** — se sacó con una heurística de respaldo (ej. proveedor = primera línea del documento que no sea un encabezado tipo NIT/régimen; total = el monto con `$` más grande cuando no hay etiqueta "Total").
+- **0.0** — no se encontró nada, el campo queda vacío para que el usuario lo llene.
 
-Campos con score < 0.6 se marcan como "dudosos": en el frontend aparecen con un badge
-de advertencia (⚠) y el input se resalta en ámbar, para que el usuario los revise
-antes de confiar en ellos. Esto evita que un dato mal leído por el OCR (ej. un "8"
-leído como "3") se guarde silenciosamente como si fuera correcto.
+Los campos con score menor a 0.6 se marcan como dudosos en la interfaz (con un
+puntito ámbar al lado del label y el input resaltado), para que el usuario los mire
+con más cuidado antes de guardar. La idea es que un dato mal leído por el OCR nunca
+se guarde en automático como si fuera confiable.
 
 ### Trazabilidad
 
-El texto crudo del OCR se guarda completo en `ocr_raw_text`, y el archivo original
-queda almacenado y enlazado al registro (`file_path`). Desde el detalle del
-documento se puede ver el texto de OCR y el archivo original, y también
-"reprocesar" (volver a correr OCR + extracción) si se ajusta la lógica.
+El texto crudo que devuelve el OCR se guarda completo (`ocr_raw_text`), y el
+archivo original queda almacenado y enlazado al registro. Desde el detalle de cada
+documento se puede ver ese texto y también "reprocesar" (correr OCR + extracción de
+nuevo), útil si se ajusta la lógica de extracción después de haber cargado algo.
 
 ## Estructura del repositorio
 
 ```
 gestion-gastos/
-├── backend/     # Laravel — API REST (este paquete NO incluye el esqueleto de Laravel,
-│                  ver "Paso a paso" para generarlo)
+├── backend/     Laravel — API REST (no incluye el esqueleto completo de Laravel,
+│                eso se genera en el paso 1 de abajo)
 │   ├── app/Models/ExpenseDocument.php
-│   ├── app/Services/OcrService.php                 <- Etapa 2: OCR
-│   ├── app/Services/ExpenseExtractionService.php    <- Etapa 3 y 4: extracción + confiabilidad
+│   ├── app/Services/OcrService.php                 <- OCR
+│   ├── app/Services/ExpenseExtractionService.php    <- extracción + confiabilidad
 │   ├── app/Http/Controllers/Api/ExpenseDocumentController.php
 │   ├── app/Http/Requests/UpdateExpenseDocumentRequest.php
 │   ├── app/Http/Resources/ExpenseDocumentResource.php
 │   ├── database/migrations/..._create_expense_documents_table.php
 │   ├── routes/api.php
 │   ├── config/cors.php
-│   ├── composer-requirements.md
 │   └── .env.example
-└── frontend/    # React + Vite — SPA completa
-    ├── src/pages/DocumentsList.jsx      <- Etapa 6 y 7: listado + filtros
-    ├── src/pages/DocumentUpload.jsx     <- Etapa 1: carga
-    ├── src/pages/DocumentDetail.jsx     <- Etapa 5: revisión humana
-    ├── src/components/Filters.jsx
-    ├── src/components/ConfidenceBadge.jsx
+└── frontend/    React + Vite — SPA completa
+    ├── src/pages/DocumentsList.jsx      <- listado + filtros
+    ├── src/pages/DocumentUpload.jsx     <- carga
+    ├── src/pages/DocumentDetail.jsx     <- revisión humana
+    ├── src/components/
     ├── src/api/client.js
     └── src/index.css
 ```
 
-> **Nota:** este paquete trae solo los archivos *propios* de la aplicación (los que
-> tienen la lógica de negocio), no el esqueleto completo de Laravel (que son cientos
-> de archivos de framework generados por Composer). El paso a paso de abajo genera
-> ese esqueleto y luego copia estos archivos encima.
+## Lo que hay que tener instalado
 
-## Paso a paso para ejecutar el proyecto
+Esto es lo que realmente se necesitó instalar para que todo funcionara de punta a
+punta (probado en Windows 10/11, que es donde más fricción da; en Linux/Mac los
+pasos son más directos):
 
-### 0. Requisitos previos
+| Herramienta | Versión usada en las pruebas | Para qué |
+|---|---|---|
+| PHP | 8.3.33 | Correr Laravel |
+| Composer | cualquier versión reciente (2.x) | Instalar dependencias de PHP |
+| Node.js | 18+ | Correr el frontend |
+| npm | el que trae Node | Instalar dependencias del frontend |
+| Tesseract OCR | 5.5.3 | Leer el texto de las imágenes |
+| Paquete de idioma español de Tesseract (`spa.traineddata`) | — | Sin esto, Tesseract solo lee inglés y el OCR de facturas en español sale vacío |
+| Poppler (`pdftoppm`) | cualquier build reciente para Windows | Convertir cada página de un PDF a imagen antes de pasarla por Tesseract |
 
-- PHP 8.2+ y Composer
-- Node.js 18+
-- Motor de OCR a nivel de sistema operativo:
+**Nota sobre PDF vs. imágenes:** el plan original era usar la extensión Imagick de
+PHP para convertir PDF a imagen, pero instalar Imagick en Windows es bastante
+complicado (hay que hacer coincidir la versión exacta del `.dll` con la versión y
+arquitectura de PHP). Se terminó reemplazando por `pdftoppm` (parte de Poppler),
+que es un ejecutable independiente — se descarga, se agrega al PATH y ya. El
+`OcrService` intenta usar Imagick primero si está disponible, y si no, cae
+automáticamente a `pdftoppm`.
 
-  ```bash
-  # Ubuntu / Debian
-  sudo apt-get update
-  sudo apt-get install -y tesseract-ocr tesseract-ocr-spa imagemagick ghostscript php-imagick
+### Instalar Tesseract (Windows)
 
-  # macOS
-  brew install tesseract tesseract-lang imagemagick ghostscript
-  ```
+1. Descargar el instalador desde [github.com/UB-Mannheim/tesseract/wiki](https://github.com/UB-Mannheim/tesseract/wiki).
+2. Durante la instalación, en "Additional language data" marcar **Spanish**. Si no
+   se marca ahí, hay que bajar `spa.traineddata` aparte desde
+   [tessdata_fast](https://github.com/tesseract-ocr/tessdata_fast) y copiarlo a
+   `C:\Program Files\Tesseract-OCR\tessdata\`.
+3. Agregar `C:\Program Files\Tesseract-OCR` al PATH del sistema.
+4. Verificar en una consola nueva:
+   ```
+   tesseract --version
+   tesseract --list-langs
+   ```
+   `spa` debe aparecer en la lista de idiomas.
 
-  Si `php-imagick` no está disponible en tu entorno, revisa la nota al final de
-  `backend/composer-requirements.md` para usar `pdftoppm` como alternativa.
+### Instalar Poppler / pdftoppm (Windows)
 
-### 1. Backend (Laravel)
+1. Descargar el zip más reciente desde
+   [github.com/oschwartz10612/poppler-windows/releases](https://github.com/oschwartz10612/poppler-windows/releases).
+2. Descomprimir en una carpeta fija, por ejemplo `C:\poppler\` (queda
+   `C:\poppler\Library\bin\pdftoppm.exe`).
+3. Agregar `C:\poppler\Library\bin` al PATH del sistema.
+4. Verificar en una consola nueva: `pdftoppm -v`.
+
+En Linux es un solo comando: `sudo apt-get install -y tesseract-ocr tesseract-ocr-spa poppler-utils`.
+En Mac: `brew install tesseract tesseract-lang poppler`.
+
+## Cómo levantar el proyecto
+
+### Backend
 
 ```bash
-# Generar el esqueleto de Laravel en una carpeta nueva
+# 1. Generar el esqueleto de Laravel
 composer create-project laravel/laravel backend-app "^11.0"
 cd backend-app
 
-# Copiar los archivos de esta entrega ENCIMA del esqueleto recién creado
+# 2. Copiar los archivos de esta entrega encima del esqueleto
 cp -r ../gestion-gastos/backend/app/Models/ExpenseDocument.php app/Models/
 cp -r ../gestion-gastos/backend/app/Services app/
 cp -r ../gestion-gastos/backend/app/Http/Controllers/Api app/Http/Controllers/
-cp -r ../gestion-gastos/backend/app/Http/Requests/UpdateExpenseDocumentRequest.php app/Http/Requests/
+cp ../gestion-gastos/backend/app/Http/Requests/UpdateExpenseDocumentRequest.php app/Http/Requests/
 cp -r ../gestion-gastos/backend/app/Http/Resources app/Http/
 cp ../gestion-gastos/backend/database/migrations/*.php database/migrations/
 cp ../gestion-gastos/backend/routes/api.php routes/api.php
 cp ../gestion-gastos/backend/config/cors.php config/cors.php
 cp ../gestion-gastos/backend/.env.example .env.example
 
-# Instalar la dependencia de OCR
+# 3. Instalar la dependencia de OCR
 composer require thiagoalessio/tesseract_ocr
 
-# Configurar entorno
+# 4. Configurar el entorno
 cp .env.example .env
 php artisan key:generate
-touch database/database.sqlite   # porque .env usa DB_CONNECTION=sqlite
+touch database/database.sqlite
 
-# Migrar y enlazar storage público (para poder ver las imágenes cargadas)
+# 5. Habilitar routes/api.php (ver nota abajo, Laravel 11 no lo carga solo)
+
+# 6. Migrar
 php artisan migrate
-php artisan storage:link
 
-# Levantar el servidor
-php artisan serve   # http://localhost:8000
+# 7. Levantar el servidor
+php artisan serve
 ```
 
-> Laravel 11 no trae `routes/api.php` habilitado por defecto. Si al llamar a
-> `/api/expense-documents` te da 404, agrega esto en `bootstrap/app.php`, dentro de
-> `Application::configure(...)->withRouting(...)`:
-> ```php
-> ->withRouting(
->     web: __DIR__.'/../routes/web.php',
->     api: __DIR__.'/../routes/api.php',
->     commands: __DIR__.'/../routes/console.php',
->     health: '/up',
-> )
-> ```
+Backend corriendo en `http://localhost:8000`.
 
-### 2. Frontend (React)
+**Nota — `routes/api.php` no se carga solo en Laravel 11.** Hay que abrir
+`bootstrap/app.php` y agregar la línea `api:` dentro de `withRouting(...)`:
+
+```php
+return Application::configure(basePath: dirname(__DIR__))
+    ->withRouting(
+        web: __DIR__.'/../routes/web.php',
+        api: __DIR__.'/../routes/api.php',   // <- esta línea hay que agregarla
+        commands: __DIR__.'/../routes/console.php',
+        health: '/up',
+    )
+    // ...
+```
+
+Sin esto, cualquier llamada a `/api/...` responde 404 aunque el archivo de rutas
+exista y tenga las rutas bien definidas.
+
+**Nota — por qué las imágenes/PDF no se sirven con `storage:link`.** El plan
+original era el típico de Laravel: `php artisan storage:link` crea un enlace
+simbólico de `public/storage` hacia `storage/app/public`, y desde ahí se sirven los
+archivos. El problema es que el servidor de desarrollo de PHP (`php artisan serve`)
+no sigue bien los enlaces simbólicos en Windows, así que cualquier archivo servido
+por esa ruta devuelve **403 Forbidden**. La solución fue agregar una ruta propia en
+`routes/api.php` que sirve el archivo directamente desde el disco sin depender del
+symlink:
+
+```php
+Route::get('/files/{path}', function (string $path) {
+    if (! Storage::disk('public')->exists($path)) {
+        abort(404);
+    }
+    return response()->file(Storage::disk('public')->path($path));
+})->where('path', '.*')->name('files.show');
+```
+
+Y el `ExpenseDocumentResource` arma la URL de cada documento con
+`route('files.show', ...)` en vez de `asset('storage/...')`. Si el proyecto se
+despliega más adelante detrás de un servidor real (Apache/Nginx), esto se puede
+volver a simplificar y usar el symlink normal — el workaround es específico para
+correr con `php artisan serve` en Windows.
+
+### Frontend
 
 ```bash
 cd gestion-gastos/frontend
 cp .env.example .env
 npm install
-npm run dev   # http://localhost:5173
+npm run dev
 ```
 
-Abre `http://localhost:5173`. Con el backend corriendo en `:8000`, la SPA ya
-debería poder listar, cargar, filtrar y editar documentos.
+Frontend corriendo en `http://localhost:5173`. Con el backend arriba en `:8000`, ya
+se puede cargar, listar, filtrar y editar documentos desde ahí.
 
-## Cómo funciona cada módulo
+### Después de cualquier cambio en el backend
 
-1. **Carga (`DocumentUpload.jsx` → `ExpenseDocumentController@store`)**
-   El usuario sube un JPG/PNG/PDF. El backend lo valida (tipo y peso máx. 10 MB),
-   lo guarda en `storage/app/public/expense-documents` y crea el registro.
+Estos dos comandos resuelven la mayoría de los dolores de cabeza después de tocar
+código PHP (clases nuevas que "no existen", rutas que no aparecen, cachés viejas):
 
-2. **OCR (`OcrService`)**
-   Si es PDF, cada página se rasteriza a PNG con Imagick/Ghostscript. Cada imagen
-   pasa por Tesseract (idiomas español + inglés) y se concatena el texto.
+```bash
+composer dump-autoload -o
+php artisan optimize:clear
+```
 
-3. **Extracción (`ExpenseExtractionService`)**
-   Sobre el texto normalizado se aplican expresiones regulares por campo
-   (proveedor, número de factura, fecha, subtotal, impuestos, total, moneda) y
-   una clasificación por palabras clave para la categoría. Cada campo recibe un
-   score de confianza según qué tan directo fue el match (ver tabla arriba).
+Y siempre reiniciar `php artisan serve` después de tocar `bootstrap/app.php` o
+`routes/api.php` — esos archivos no se recargan solos con el servidor corriendo.
 
-4. **Persistencia**
-   Todo (campos + `ocr_raw_text` + `field_confidence` + `overall_confidence`)
-   se guarda en `expense_documents` con estado `pendiente_revision`.
+## Cómo funciona cada parte
 
-5. **Revisión humana (`DocumentDetail.jsx` → `@update`)**
-   El usuario ve el documento original al lado de los campos extraídos. Los
-   campos de baja confianza están resaltados. Puede corregir cualquier campo,
-   completar los que quedaron vacíos, cambiar la categoría y guardar; al guardar,
-   el registro pasa a `revisado` y queda marcado `was_manually_edited = true`
-   (así se distingue lo que dijo el OCR de lo que confirmó una persona).
+1. **Carga** (`DocumentUpload.jsx` → `ExpenseDocumentController@store`): se sube un
+   JPG/PNG/PDF, se valida tipo y peso (máx. 10 MB), se guarda en
+   `storage/app/public/expense-documents` y se crea el registro en la base de datos.
 
-6. **Listado y gestión (`DocumentsList.jsx` → `@index` / `@destroy`)**
-   Tabla con proveedor, fecha, categoría, total, score de confianza y estado.
-   Permite ver/editar y eliminar cada documento.
+2. **OCR** (`OcrService`): si es PDF, cada página se convierte a PNG con `pdftoppm`
+   (o Imagick si está disponible). Cada imagen resultante pasa por Tesseract en
+   español + inglés y el texto se concatena.
 
-7. **Filtros (`Filters.jsx` → query params `fecha_desde`, `fecha_hasta`, `categoria`)**
-   Filtro por rango de fechas y por categoría (obligatorios en el enunciado),
-   más un filtro adicional por proveedor.
+3. **Extracción** (`ExpenseExtractionService`): sobre el texto del OCR se aplican
+   expresiones regulares por campo (proveedor, número de factura, fecha, subtotal,
+   impuestos, total, moneda), con varios niveles de prioridad — por ejemplo, para la
+   fecha primero busca explícitamente "fecha de facturación/emisión", y solo si no
+   la encuentra cae a una búsqueda más genérica de la palabra "fecha" (evitando
+   agarrar por error la fecha del Formulario DIAN, que es un dato administrativo
+   aparte). La categoría sale de una clasificación por palabras clave. Cada campo
+   queda con su score de confianza.
 
-8. **Git**
-   Este entregable está pensado para inicializarse como repo desde el momento en
-   que generes el esqueleto de Laravel (`git init` dentro de `backend-app/`) y
-   hagas commits a medida que copies/ajustes cada pieza — así queda visible la
-   evolución real del trabajo, tal como pide el enunciado.
+4. **Persistencia**: todo (campos + texto de OCR + scores) se guarda con estado
+   `pendiente_revision`.
+
+5. **Revisión humana** (`DocumentDetail.jsx` → `@update`): se ve el documento
+   original al lado de los campos extraídos, con los de baja confianza resaltados.
+   Se puede corregir cualquier campo, completar los vacíos, cambiar la categoría y
+   guardar; al guardar, el estado pasa a `revisado` y queda marcado
+   `was_manually_edited = true` (para distinguir lo que dijo el OCR de lo que
+   confirmó una persona).
+
+6. **Listado y gestión** (`DocumentsList.jsx` → `@index` / `@destroy`): tabla con
+   proveedor, fecha, categoría, total, score de confianza y estado, con acciones de
+   ver/editar y eliminar.
+
+7. **Filtros** (`Filters.jsx`): por rango de fechas y por categoría (los dos que
+   pide el enunciado), más uno adicional por proveedor.
+
+8. **Git**: pensado para inicializar el repo desde el momento en que se genera el
+   esqueleto de Laravel (`git init` dentro de `backend-app/`) y hacer commits a
+   medida que se copian y ajustan las piezas, para que quede visible cómo fue
+   avanzando el trabajo.
 
 ## Endpoints de la API
 
-| Método | Ruta | Descripción |
+| Método | Ruta | Qué hace |
 |---|---|---|
 | GET | `/api/expense-documents` | Lista (filtros: `fecha_desde`, `fecha_hasta`, `categoria`, `proveedor`) |
 | POST | `/api/expense-documents` | Sube un archivo (`file`), corre OCR + extracción |
@@ -196,14 +269,15 @@ debería poder listar, cargar, filtrar y editar documentos.
 | PUT/PATCH | `/api/expense-documents/{id}` | Guarda correcciones manuales |
 | DELETE | `/api/expense-documents/{id}` | Elimina el documento y su archivo |
 | POST | `/api/expense-documents/{id}/reprocess` | Vuelve a correr OCR + extracción |
+| GET | `/api/files/{path}` | Sirve el archivo original (imagen/PDF) |
 
-## Limitaciones conocidas / próximos pasos
+## Cosas que se quedaron pendientes / se podrían mejorar
 
-- La extracción por regex funciona bien con facturas en español con etiquetas
-  razonablemente estándar; documentos muy atípicos pueden requerir más reglas o,
-  como evolución natural, delegar la extracción a un LLM (el `ExpenseExtractionService`
-  está aislado justamente para poder intercambiarlo sin tocar el resto de la app).
+- La extracción por regex funciona bien con facturas en español que tienen
+  etiquetas más o menos estándar. Documentos muy raros van a necesitar más reglas,
+  o eventualmente pasar la extracción a un LLM — el `ExpenseExtractionService` está
+  aislado justamente para que ese cambio no toque el resto de la app.
 - No hay autenticación (no se pidió para esta prueba).
-- No hay tests automatizados por el límite de tiempo de la prueba; los servicios
-  (`OcrService`, `ExpenseExtractionService`) están desacoplados del controlador
-  precisamente para que sean fáciles de testear con PHPUnit si se quisiera ampliar.
+- No hay tests automatizados por tiempo. `OcrService` y `ExpenseExtractionService`
+  están desacoplados del controlador a propósito, para que sea fácil escribirles
+  tests con PHPUnit si se quiere ampliar esto después.
