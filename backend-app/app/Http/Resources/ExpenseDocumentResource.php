@@ -12,7 +12,7 @@ class ExpenseDocumentResource extends JsonResource
         return [
             'id' => $this->id,
             'original_filename' => $this->original_filename,
-            'file_url' => asset('storage/'.$this->file_path),
+            'file_url' => route('files.show', ['path' => $this->file_path]),
             'mime_type' => $this->mime_type,
             'proveedor' => $this->proveedor,
             'numero_factura' => $this->numero_factura,
