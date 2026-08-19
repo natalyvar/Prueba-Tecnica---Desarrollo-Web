@@ -78,7 +78,7 @@ pasos son más directos):
 | Composer | cualquier versión reciente (2.x) | Instalar dependencias de PHP | — |
 | Node.js | 18+ | Correr el frontend | — |
 | npm | el que trae Node | Instalar dependencias del frontend | — |
-| Tesseract OCR | 5.5.3 | Leer el texto de las imágenes | [github.com/UB-Mannheim/tesseract/wiki](https://github.com/UB-Mannheim/tesseract/wiki) |
+| Tesseract OCR | 5.5.3 | Leer el texto de las imágenes | [github.com/UB-Mannheim/tesseract/wiki](https://github.com/UB-Mannheim/tesseract/wiki) - installer https://github.com/tesseract-ocr/tesseract/releases/download/5.5.3/tesseract-ocr-w64-setup-5.5.3.20260724.exe  |
 | Paquete de idioma español de Tesseract (`spa.traineddata`) | — | Sin esto, Tesseract solo lee inglés y el OCR de facturas en español sale vacío | [github.com/tesseract-ocr/tessdata_fast](https://github.com/tesseract-ocr/tessdata_fast/raw/main/spa.traineddata) |
 | Poppler (`pdftoppm`) | cualquier build reciente para Windows | Convertir cada página de un PDF a imagen antes de pasarla por Tesseract | [github.com/oschwartz10612/poppler-windows/releases](https://github.com/oschwartz10612/poppler-windows/releases) |
 
