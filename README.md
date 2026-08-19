@@ -40,9 +40,8 @@ nuevo), útil si se ajusta la lógica de extracción después de haber cargado a
 ## Estructura del repositorio
 
 ```
-gestion-gastos/
-├── backend/     Laravel — API REST (no incluye el esqueleto completo de Laravel,
-│                eso se genera en el paso 1 de abajo)
+Prueba-Tecnica---Desarrollo-Web/
+├── backend-app/     Proyecto Laravel 11 completo (API REST)
 │   ├── app/Models/ExpenseDocument.php
 │   ├── app/Services/OcrService.php                 <- OCR
 │   ├── app/Services/ExpenseExtractionService.php    <- extracción + confiabilidad
@@ -53,7 +52,7 @@ gestion-gastos/
 │   ├── routes/api.php
 │   ├── config/cors.php
 │   └── .env.example
-└── frontend/    React + Vite — SPA completa
+└── frontend-app/    Proyecto React + Vite completo (SPA)
     ├── src/pages/DocumentsList.jsx      <- listado + filtros
     ├── src/pages/DocumentUpload.jsx     <- carga
     ├── src/pages/DocumentDetail.jsx     <- revisión humana
@@ -62,21 +61,26 @@ gestion-gastos/
     └── src/index.css
 ```
 
+`backend-app/` y `frontend-app/` son dos proyectos completos e independientes, uno
+al lado del otro. `backend-app/` ya es un proyecto Laravel armado (no hay que
+generarlo desde cero ni copiar archivos de otro lado) — solo instalar dependencias
+y configurarlo, como cualquier proyecto Laravel que se clona.
+
 ## Lo que hay que tener instalado
 
 Esto es lo que realmente se necesitó instalar para que todo funcionara de punta a
 punta (probado en Windows 10/11, que es donde más fricción da; en Linux/Mac los
 pasos son más directos):
 
-| Herramienta | Versión usada en las pruebas | Para qué |
-|---|---|---|
-| PHP | 8.3.33 | Correr Laravel |
-| Composer | cualquier versión reciente (2.x) | Instalar dependencias de PHP |
-| Node.js | 18+ | Correr el frontend |
-| npm | el que trae Node | Instalar dependencias del frontend |
-| Tesseract OCR | 5.5.3 | Leer el texto de las imágenes |
-| Paquete de idioma español de Tesseract (`spa.traineddata`) | — | Sin esto, Tesseract solo lee inglés y el OCR de facturas en español sale vacío |
-| Poppler (`pdftoppm`) | cualquier build reciente para Windows | Convertir cada página de un PDF a imagen antes de pasarla por Tesseract |
+| Herramienta | Versión usada en las pruebas | Para qué | Descarga |
+|---|---|---|---|
+| PHP | 8.3.33 | Correr Laravel | — |
+| Composer | cualquier versión reciente (2.x) | Instalar dependencias de PHP | — |
+| Node.js | 18+ | Correr el frontend | — |
+| npm | el que trae Node | Instalar dependencias del frontend | — |
+| Tesseract OCR | 5.5.3 | Leer el texto de las imágenes | [github.com/UB-Mannheim/tesseract/wiki](https://github.com/UB-Mannheim/tesseract/wiki) |
+| Paquete de idioma español de Tesseract (`spa.traineddata`) | — | Sin esto, Tesseract solo lee inglés y el OCR de facturas en español sale vacío | [github.com/tesseract-ocr/tessdata_fast](https://github.com/tesseract-ocr/tessdata_fast/raw/main/spa.traineddata) |
+| Poppler (`pdftoppm`) | cualquier build reciente para Windows | Convertir cada página de un PDF a imagen antes de pasarla por Tesseract | [github.com/oschwartz10612/poppler-windows/releases](https://github.com/oschwartz10612/poppler-windows/releases) |
 
 **Nota sobre PDF vs. imágenes:** el plan original era usar la extensión Imagick de
 PHP para convertir PDF a imagen, pero instalar Imagick en Windows es bastante
@@ -117,38 +121,27 @@ En Mac: `brew install tesseract tesseract-lang poppler`.
 
 ### Backend
 
-```bash
-# 1. Generar el esqueleto de Laravel
-composer create-project laravel/laravel backend-app "^11.0"
+```cmd
 cd backend-app
 
-# 2. Copiar los archivos de esta entrega encima del esqueleto
-cp -r ../gestion-gastos/backend/app/Models/ExpenseDocument.php app/Models/
-cp -r ../gestion-gastos/backend/app/Services app/
-cp -r ../gestion-gastos/backend/app/Http/Controllers/Api app/Http/Controllers/
-cp ../gestion-gastos/backend/app/Http/Requests/UpdateExpenseDocumentRequest.php app/Http/Requests/
-cp -r ../gestion-gastos/backend/app/Http/Resources app/Http/
-cp ../gestion-gastos/backend/database/migrations/*.php database/migrations/
-cp ../gestion-gastos/backend/routes/api.php routes/api.php
-cp ../gestion-gastos/backend/config/cors.php config/cors.php
-cp ../gestion-gastos/backend/.env.example .env.example
+:: Instalar dependencias (incluye la de OCR, ya declarada en composer.json)
+composer install
 
-# 3. Instalar la dependencia de OCR
-composer require thiagoalessio/tesseract_ocr
-
-# 4. Configurar el entorno
-cp .env.example .env
+:: Configurar el entorno
+copy .env.example .env
 php artisan key:generate
-touch database/database.sqlite
+type nul > database\database.sqlite
 
-# 5. Habilitar routes/api.php (ver nota abajo, Laravel 11 no lo carga solo)
-
-# 6. Migrar
+:: Migrar
 php artisan migrate
 
-# 7. Levantar el servidor
+:: Levantar el servidor
 php artisan serve
 ```
+
+> **Antes de migrar y levantar el servidor**, asegúrate de haber habilitado
+> `routes/api.php` en `bootstrap/app.php` — no es un comando de consola, hay que
+> editar el archivo a mano una sola vez. Ver el detalle justo abajo.
 
 Backend corriendo en `http://localhost:8000`.
 
@@ -195,9 +188,9 @@ correr con `php artisan serve` en Windows.
 
 ### Frontend
 
-```bash
-cd gestion-gastos/frontend
-cp .env.example .env
+```cmd
+cd frontend-app
+copy .env.example .env
 npm install
 npm run dev
 ```
